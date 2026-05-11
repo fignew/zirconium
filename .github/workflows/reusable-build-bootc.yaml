@@ -110,7 +110,7 @@ jobs:
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
 
       - name: Enable cache for brew
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         if: inputs.publish
         id: brew-cache
         with:
@@ -118,7 +118,7 @@ jobs:
           key: brew-${{ matrix.platform }}
 
       - name: Setup image cache
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         if: inputs.publish
         env:
           MATRIX_BASE_NAME: ${{ matrix.base_name }}
@@ -203,15 +203,12 @@ jobs:
           MAX_RETRIES: 3
         run: |
           set -x
-          # HACK: push a second time so layer annotations are present
+          # HACK: push two times so layer annotations are present
           # TODO: remove me when https://github.com/containers/podman/issues/27796 fixed
-          for i in $(seq "${MAX_RETRIES}"); do
-            sudo /home/linuxbrew/.linuxbrew/bin/podman push --digestfile=/tmp/digestfile "localhost/${IMAGE_NAME}:${DEFAULT_TAG}" "${IMAGE_REGISTRY}/${IMAGE_NAME}:${DEFAULT_TAG}-${PLATFORM}" && break || sleep $((5 * i));
-          done
-          echo "remote_image_digest=$(< /tmp/digestfile)" | tee "${GITHUB_OUTPUT}"
-
-          for i in $(seq "${MAX_RETRIES}"); do
-            sudo /home/linuxbrew/.linuxbrew/bin/podman push --digestfile=/tmp/digestfile "localhost/${IMAGE_NAME}:${DEFAULT_TAG}" "${IMAGE_REGISTRY}/${IMAGE_NAME}:${DEFAULT_TAG}-${PLATFORM}" && break || sleep $((5 * i));
+          for _ in $(seq 2); do
+            for i in $(seq "${MAX_RETRIES}"); do
+              sudo /home/linuxbrew/.linuxbrew/bin/podman push --compression-format=zstd --digestfile=/tmp/digestfile "localhost/${IMAGE_NAME}:${DEFAULT_TAG}" "${IMAGE_REGISTRY}/${IMAGE_NAME}:${DEFAULT_TAG}-${PLATFORM}" && break || sleep $((5 * i));
+            done
           done
           echo "remote_image_digest=$(< /tmp/digestfile)" | tee "${GITHUB_OUTPUT}"
 
@@ -240,7 +237,7 @@ jobs:
 
       - name: Upload Output Artifacts
         if: inputs.publish
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ env.IMAGE_NAME }}-${{ matrix.platform }}
           retention-days: 1
@@ -277,6 +274,11 @@ jobs:
             fi
           done
 
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          submodules: true
+
         # This generates a timestamp like what is defined on the ArtifactHub documentation
         # E.G: 2022-02-08T15:38:15Z'
         # https://artifacthub.io/docs/topics/repositories/container-images/
@@ -287,17 +289,17 @@ jobs:
           set -xeuo pipefail
           echo "date=$(date -u +%Y\-%m\-%d\T%H\:%M\:%S\Z)" >> "${GITHUB_OUTPUT}"
 
-      - name: Get repository metadata
-        id: repodata
-        run:
-          set -xeuo pipefail
-          echo "shortcommit=$(git rev-parse --short HEAD)" >> "${GITHUB_OUTPUT}"
-
       - name: Get mkosi metadata
         id: imagemetadata
+        env:
+          MANUAL_RELEASE: ${{ inputs.release }}
         run: |
           set -xeuo pipefail
-          echo "distributionversion=$(grep "Release=" mkosi.conf | cut -d= -f2)" >> "${GITHUB_OUTPUT}"
+          if [ "$MANUAL_RELEASE" != "" ] ; then
+            echo "distributionversion=${MANUAL_RELEASE}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "distributionversion=$(grep "Release=" mkosi.conf | cut -d= -f2)" >> "${GITHUB_OUTPUT}"
+          fi
 
       - name: Image Metadata
         uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6
@@ -306,12 +308,12 @@ jobs:
           tags: |
             type=raw,value=${{ env.DEFAULT_TAG }}
             type=raw,value=${{ steps.imagemetadata.outputs.distributionversion }}
-            type=raw,value=${{ env.DEFAULT_TAG }}+${{ steps.repodata.outputs.shortcommit }}
-            type=raw,value=${{ steps.imagemetadata.outputs.distributionversion }}+${{ steps.repodata.outputs.shortcommit }}
+            type=raw,value=${{ env.DEFAULT_TAG }}-${{ github.sha }}
+            type=raw,value=${{ steps.imagemetadata.outputs.distributionversion }}-${{ github.sha }}
             type=raw,value=${{ env.DEFAULT_TAG }}.{{date 'YYYYMMDD'}}
             type=raw,value=${{ steps.imagemetadata.outputs.distributionversion }}.{{date 'YYYYMMDD'}}
-            type=raw,value=${{ env.DEFAULT_TAG }}.{{date 'YYYYMMDD'}}+${{ steps.repodata.outputs.shortcommit }}
-            type=raw,value=${{ steps.imagemetadata.outputs.distributionversion }}.{{date 'YYYYMMDD'}}+${{ steps.repodata.outputs.shortcommit }}
+            type=raw,value=${{ env.DEFAULT_TAG }}.{{date 'YYYYMMDD'}}-${{ github.sha }}
+            type=raw,value=${{ steps.imagemetadata.outputs.distributionversion }}.{{date 'YYYYMMDD'}}-${{ github.sha }}
             type=raw,value={{ date 'YYYYMMDD'}},enable=${{ env.DEFAULT_TAG == 'latest' }}
             type=ref,event=pr
             type=sha,enable=${{ github.event_name == 'pull_request' }}
@@ -399,15 +401,13 @@ jobs:
               podman manifest annotate --index --annotation "${LABEL}" "${TARGET_MANIFEST}"
             done <<< "${LABELS}"
 
-            while IFS= read -r TAG; do
-              podman manifest push --all=false --digestfile=/tmp/digestfile "${TARGET_MANIFEST}" "${TARGET_MANIFEST}:${TAG}"
-            done <<< "${TAGS}"
-
-          # HACK: push a second time so layer annotations are present
-          # TODO: remove me when https://github.com/containers/podman/issues/27796 fixed
-            while IFS= read -r TAG; do
-              podman manifest push --all=false --digestfile=/tmp/digestfile "${TARGET_MANIFEST}" "${TARGET_MANIFEST}:${TAG}"
-            done <<< "${TAGS}"
+            # HACK: push two times so layer annotations are present
+            # TODO: remove me when https://github.com/containers/podman/issues/27796 fixed
+            for _ in $(seq 2); do
+              while IFS= read -r TAG; do
+                podman manifest push --all=false --digestfile=/tmp/digestfile "${TARGET_MANIFEST}" "${TARGET_MANIFEST}:${TAG}"
+              done <<< "${TAGS}"
+            done
 
             cosign sign -y --new-bundle-format=false --use-signing-config=false --key env://COSIGN_PRIVATE_KEY "${TARGET_MANIFEST}@$(< /tmp/digestfile)"
           done
