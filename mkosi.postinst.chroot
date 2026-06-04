@@ -6,7 +6,9 @@ install -Dpm0644 -t /usr/share/flatpak/remotes.d/ "$SRCDIR/cache/flathub.flatpak
 
 niri --version | grep -i -E "niri [[:digit:]]*\.[[:digit:]]* (.*\.git\..*)"
 
-sed -i 's|^ExecStart=.*|ExecStart=/usr/bin/bootc update --quiet|' /usr/lib/systemd/system/bootc-fetch-apply-updates.service
+# remove debug variable in dms-greeter which no longer exists in niri
+# FIXME: remove it when dms-greeter gets a new release
+sed --sandbox -i -e '/debug {/,+3d' /usr/bin/dms-greeter
 
 install -d /usr/share/zirconium/
 install -Dpm0644 -t /usr/lib/pam.d/ /usr/share/quickshell/dms/assets/pam/* # Fixes long login times on fingerprint auth
@@ -37,6 +39,8 @@ stat /usr/lib/systemd/system/brew-setup.service
 stat /usr/share/homebrew.tar.zst
 stat /usr/lib/tmpfiles.d/homebrew.conf
 
+setfattr -n user.component -v "homebrew" /usr/share/homebrew.tar.zst
+
 HOME_URL="https://github.com/zirconium-dev/zirconium"
 echo "zirconium" | tee "/etc/hostname"
 # OS Release File (changed in order with upstream)
@@ -44,7 +48,7 @@ echo "zirconium" | tee "/etc/hostname"
 sed -i -f - /usr/lib/os-release <<EOF
 s|^NAME=.*|NAME=\"Zirconium\"|
 s|^PRETTY_NAME=.*|PRETTY_NAME=\"Zirconium\"|
-s|^VERSION_CODENAME=.*|VERSION_CODENAME=\"Juno\"|
+s|^VERSION_CODENAME=.*|VERSION_CODENAME=\"Pibble\"|
 s|^VARIANT_ID=.*|VARIANT_ID=""|
 s|^HOME_URL=.*|HOME_URL=\"${HOME_URL}\"|
 s|^BUG_REPORT_URL=.*|BUG_REPORT_URL=\"${HOME_URL}/issues\"|
