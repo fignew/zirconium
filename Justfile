@@ -1,23 +1,35 @@
 image := env("IMAGE_FULL", "localhost/zirconium:latest")
+image_name := "zirconium"
 filesystem := env("BUILD_FILESYSTEM", "btrfs")
 
-default:
+iterate-sysupdate $IMAGE_NAME=image_name:
+    #!/usr/bin/env bash
+    set -xeuo pipefail
+    just build-sysupdate
+    LATEST_IMAGE="$(find mkosi.output -iname "${IMAGE_NAME^}_*_$(uname -m | tr '_' '-').raw" | tail -n-1)"
+    qemu-img resize "${LATEST_IMAGE}" +40G
+    vmbuddy -f "${LATEST_IMAGE}"
+
+iterate-bootc:
     #!/usr/bin/env bash
     set -xeuo pipefail
     just build
-    just load
-    just lint
-    just rechunk
-    env BUILD_BASE_DIR=/tmp just disk-image
+    sudo just load
+    sudo just lint
+    sudo just rechunk
+    sudo env BUILD_BASE_DIR=/tmp just disk-image
     vmbuddy -f /tmp/bootable.img
 
 build: build-ostree
 
 build-ostree:
-    mkosi -B --debug --profile=bootc-ostree
+    mkosi -B --debug-shell --profile=base,base-desktop,bootc-ostree,brew,zirconium-bootc-ostree
 
 build-sysupdate:
-    mkosi -B --debug --profile=sysupdate
+    mkosi -B --debug-shell --profile=base,base-desktop,sysupdate,brew,base
+
+build-iso:
+    mkosi -B --debug --profile=iso
 
 lint:
     podman run --rm -it --entrypoint=bootc {{ image }} container lint
@@ -59,12 +71,27 @@ disk-image $filesystem=filesystem:
 
 rechunk $image_name=image:
     #!/usr/bin/env bash
-    export CHUNKAH_CONFIG_STR="$(podman inspect "${image_name}")"
+    set -eoux pipefail
+
+    CHUNKAH_OUTPUT_DIR="$(mktemp -d)"
+    CHUNKAH_CONFIG_FILE="$(mktemp)"
+
+    trap 'rm -f "${CHUNKAH_CONFIG_FILE}"; rm -rf "${CHUNKAH_OUTPUT_DIR}"' EXIT
+    podman inspect "${image_name}" > "${CHUNKAH_CONFIG_FILE}"
+
     podman run --rm "--mount=type=image,src=${image_name},target=/chunkah" \
-        -e CHUNKAH_CONFIG_STR quay.io/coreos/chunkah build \
+        -v "${CHUNKAH_CONFIG_FILE}:/chunkah-config.json:ro,Z" \
+        -v "${CHUNKAH_OUTPUT_DIR}:/run/out:Z" \
+        quay.io/coreos/chunkah:latest build \
+        --verbose \
+        --compressed \
         --prune /sysroot/ --label containers.bootc=1 \
-        --compressed --max-layers 128 --tag "${image_name}" \
-        | podman load
+        --max-layers 128 --tag "${image_name}" \
+        --config /chunkah-config.json \
+        --output oci:/run/out/chunked
+
+    CHUNKED_IMAGE="$(podman pull "oci:${CHUNKAH_OUTPUT_DIR}/chunked")"
+    podman tag "${CHUNKED_IMAGE}" "${image_name}"
 
 clean:
     mkosi clean

@@ -21,11 +21,6 @@ on:
         required: false
         type: string
         default: "amd64,arm64"
-      rechunk:
-        description: "Rechunk the build"
-        required: false
-        type: boolean
-        default: true
       publish:
         description: "Publish this image"
         required: false
@@ -92,17 +87,15 @@ jobs:
           skip-if-available: "64G"
 
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           submodules: true
 
-      - name: Install dependencies for build
-        run: |
-          set -x
-          sudo apt install -y --no-install-recommends bubblewrap debian-archive-keyring python3-gpg python3-hawkey python3-libcomps python3-unbound just
-          git clone https://github.com/systemd/mkosi.git
-          sudo mv mkosi /usr/src/mkosi
-          sudo ln -sf "/usr/src/mkosi/bin/mkosi" /usr/bin/mkosi
+      - name: Install mkosi
+        uses: systemd/mkosi@35a9d38ea02e3de99d7e970d4af6e733a42d0a36 # main
+
+      - name: Install just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3
 
       - name: Render configuration (for debugging)
         run: mkosi cat-config --debug
@@ -119,24 +112,23 @@ jobs:
           if [ "$CI_MKOSI_RELEASE" != "" ] ; then
             RELEASE_ARGUMENTS+=("--release=$CI_MKOSI_RELEASE")
           fi
-          sudo mkosi -B -ff --debug --profile=bootc-ostree,${CI_MKOSI_PROFILES} ${PROFILE_ARGUMENTS} ${RELEASE_ARGUMENTS}
+          sudo mkosi -B -ff --debug --profile=base,base-desktop,bootc-ostree,brew,zirconium-bootc-ostree,${CI_MKOSI_PROFILES} ${PROFILE_ARGUMENTS} ${RELEASE_ARGUMENTS}
 
       - name: Load image
         id: load
         run: |
           set -e
-          env IMAGE_FULL="localhost/${IMAGE_NAME}:${DEFAULT_TAG}" just load
+          env IMAGE_FULL="localhost/${IMAGE_NAME}:${DEFAULT_TAG}" $(which just) load
 
       - name: Rechunk image
-        if: inputs.rechunk
         run: |
           set -e
-          env IMAGE_FULL="localhost/${IMAGE_NAME}:${DEFAULT_TAG}" just rechunk
+          env IMAGE_FULL="localhost/${IMAGE_NAME}:${DEFAULT_TAG}" $(which just) rechunk
 
       - name: Lint image
         run: |
           set -e
-          env IMAGE_FULL="localhost/${IMAGE_NAME}:${DEFAULT_TAG}" just lint
+          env IMAGE_FULL="localhost/${IMAGE_NAME}:${DEFAULT_TAG}" $(which just) lint
 
       - name: Login to GitHub Container Registry
         if: inputs.publish
@@ -215,7 +207,7 @@ jobs:
           done
 
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
         # This generates a timestamp like what is defined on the ArtifactHub documentation
         # E.G: 2022-02-08T15:38:15Z'
@@ -240,7 +232,7 @@ jobs:
           fi
 
       - name: Image Metadata
-        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         if: inputs.publish
         id: metadata
         with:
